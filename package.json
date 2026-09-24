@@ -1,7 +1,7 @@
 {
   "name": "kgbchat-desktop",
   "productName": "KGBChat",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Mattermost",
   "main": "dist/index.js",
   "author": "Mattermost, Inc. <feedback@mattermost.com>",
