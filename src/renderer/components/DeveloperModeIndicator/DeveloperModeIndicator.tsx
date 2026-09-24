@@ -18,7 +18,7 @@ export default function DeveloperModeIndicator({developerMode}: {developerMode: 
             title={
                 <FormattedMessage
                     id='renderer.components.developerModeIndicator.tooltip'
-                    defaultMessage='Developer mode is enabled. You should only have this enabled if a Mattermost developer has instructed you to.'
+                    defaultMessage='Developer mode is enabled. You should only have this enabled if a KGBChat developer has instructed you to.'
                 />
             }
             isVertical={false}

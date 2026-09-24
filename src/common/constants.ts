@@ -43,7 +43,7 @@ export const POPOUT_RATE_LIMIT = 1000;
 export const MAX_URL_LENGTH = 8192;
 
 // We use this URL inside the Diagnostics to check if the computer has internet connectivity
-export const IS_ONLINE_ENDPOINT = 'https://community.mattermost.com/api/v4/system/ping';
+export const IS_ONLINE_ENDPOINT = 'http://172.16.33.19:8066/api/v4/system/ping';
 
 export const COOKIE_NAME_USER_ID = 'MMUSERID';
 export const COOKIE_NAME_CSRF = 'MMCSRF';
