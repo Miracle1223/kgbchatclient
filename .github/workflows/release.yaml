@@ -1,0 +1,256 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TERM: xterm
+  MM_WIN_INSTALLERS: 1
+  MM_DESKTOP_BUILD_SENTRYDSN: ${{ secrets.MM_DESKTOP_BUILD_SENTRYDSN }}
+
+jobs:
+  begin-notification:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: release/checkout-repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: release/fetch-version
+        id: calc
+        run: echo "VERSION=$(jq -r .version package.json)" >> ${GITHUB_OUTPUT}
+
+      - name: release/notify-channel
+        uses: mattermost/action-mattermost-notify@ae31bb6f9e26a54336e79696f108a2c91cf55b4e
+        with:
+          MATTERMOST_WEBHOOK_URL: ${{ secrets.MM_DESKTOP_RELEASE_WEBHOOK_URL }}
+          MATTERMOST_USERNAME: MattermostRelease
+          MATTERMOST_ICON_URL: https://mattermost.com/wp-content/uploads/2022/02/icon.png
+          TEXT: |
+            [${{ steps.calc.outputs.VERSION }}] Release process for the desktop app has started, it should take about 30 minutes to complete.
+
+  build-linux:
+    runs-on: ubuntu-22.04
+    needs:
+      - begin-notification
+    steps:
+      - name: release/checkout-repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: release/setup-node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+      - name: release/install-dependencies
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: 1
+        run: |
+          wget -qO - https://download.opensuse.org/repositories/Emulators:/Wine:/Debian/xUbuntu_22.04/Release.key | sudo apt-key add -
+          wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.20.1/yq_linux_amd64 && chmod a+x /usr/local/bin/yq
+          sudo apt-get update || true && sudo apt-get install -y ca-certificates libxtst-dev libpng++-dev gcc-aarch64-linux-gnu g++-aarch64-linux-gnu jq icnsutils graphicsmagick tzdata flatpak flatpak-builder
+          sudo flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y --noninteractive flathub org.freedesktop.Platform/x86_64/25.08 org.freedesktop.Sdk/x86_64/25.08 org.electronjs.Electron2.BaseApp/x86_64/25.08 org.freedesktop.Platform/aarch64/25.08 org.freedesktop.Sdk/aarch64/25.08 org.electronjs.Electron2.BaseApp/aarch64/25.08
+          npm ci
+      - name: release/test
+        uses: ./.github/actions/test
+      - name: release/build
+        run: |
+          mkdir -p ./build/linux
+          npm run package:linux
+          bash -x ./scripts/cp_artifacts.sh release ./build/linux
+      - name: release/upload-build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-${{ runner.os }}
+          path: ./build
+          compression-level: 0
+          retention-days: 14 ## No need to keep CI builds more than 14 days
+
+  build-msi-installer:
+    runs-on: windows-2022
+    needs:
+      - begin-notification
+    steps:
+      - name: release/checkout-repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: release/setup-node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+      - name: release/install-deps
+        shell: powershell
+        run: |
+          choco install yq --version 4.15.1 -y
+          npm i -g node-gyp
+          node-gyp install
+          node-gyp install --devdir="C:\Users\runneradmin\.electron-gyp" --target=$(jq -r .devDependencies.electron package.json) --dist-url="https://electronjs.org/headers"
+          node-gyp install --devdir="C:\Users\runneradmin\.electron-gyp" --target=$(jq -r .devDependencies.electron package.json) --dist-url="https://electronjs.org/headers" --arch arm64
+          npm ci --openssl_fips=''
+      - name: release/test
+        uses: ./.github/actions/test
+      - name: release/build
+        shell: powershell
+        env:
+          MM_WIN_INSTALLERS: 1
+          AZURE_CLIENT_ID: ${{ secrets.MM_DESKTOP_MSI_INSTALLER_AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.MM_DESKTOP_MSI_INSTALLER_AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.MM_DESKTOP_MSI_INSTALLER_AZURE_TENANT_ID }}
+        run: |
+          npm run package:windows
+      - name: release/package
+        run: |
+          mkdir -p ./build/win-release
+          bash -x ./scripts/cp_artifacts.sh release ./build/win-release
+      - name: release/upload-build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-${{ runner.os }}
+          path: ./build
+          compression-level: 0
+          retention-days: 14
+
+  build-mac-installer:
+    runs-on: macos-15
+    env:
+      MACOS_NOTIFICATION_STATE_NO_SDK_CHECK: true
+    needs:
+      - begin-notification
+    steps:
+      - name: release/checkout-repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: release/setup-node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: ".nvmrc"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+      - name: release/create-build-folder
+        run: mkdir -p ./build
+      - name: release/install-dependencies
+        run: |
+          brew install yq rename
+          sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+          npm ci
+      - name: release/test
+        uses: ./.github/actions/test
+      - name: release/build
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.MM_DESKTOP_MAC_APP_STORE_MACOS_API_KEY_ID }}
+          APPLE_API_KEY_RAW: ${{ secrets.MM_DESKTOP_MAC_APP_STORE_MACOS_API_KEY }}
+          APPLE_API_KEY: "./key.p8"
+          APPLE_API_ISSUER: ${{ secrets.MM_DESKTOP_MAC_APP_STORE_MACOS_API_ISSUER_ID }}
+          CSC_FOR_PULL_REQUEST: true
+          CSC_KEY_PASSWORD: ${{ secrets.MM_DESKTOP_MAC_INSTALLER_CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ secrets.MM_DESKTOP_MAC_INSTALLER_CSC_LINK }}
+          MAC_PROFILE: ${{ secrets.MM_DESKTOP_MAC_INSTALLER_DMG_PROFILE }}
+        run: |
+          echo $MAC_PROFILE | base64 -D > ./mac.provisionprofile
+          zsh -c 'echo -n $APPLE_API_KEY_RAW > ./key.p8'
+          mkdir -p ./build/macos-release
+          npm run package:mac-with-universal
+          bash -x ./scripts/cp_artifacts.sh release ./build/macos-release
+      - name: release/upload-build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-${{ runner.os }}
+          path: ./build
+          compression-level: 0
+          retention-days: 14
+
+  upload-to-s3:
+    runs-on: ubuntu-22.04
+    needs:
+      - build-mac-installer
+      - build-msi-installer
+      - build-linux
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: release/setup-aws-credentials
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
+        with:
+          aws-region: us-east-1
+          role-to-assume: ${{ secrets.MM_DESKTOP_RELEASE_AWS_ROLE_TO_ASSUME }}
+
+      - name: release/checkout-repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: release/download-builds
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: build
+          pattern: build-*
+          merge-multiple: true
+
+      - name: release/setup-files-for-aws
+        run: |
+          mkdir -p ./aws-s3-dist
+          cp -r --backup=numbered ./build/{macos-release,win-release,linux}/* ./aws-s3-dist
+      - name: release/upload-to-s3
+        run: aws s3 cp ./aws-s3-dist/ s3://${{ secrets.MM_DESKTOP_RELEASE_BUCKET }} --cache-control "no-cache" --recursive
+
+  github-release:
+    runs-on: ubuntu-22.04
+    needs:
+      - upload-to-s3
+    steps:
+      - name: release/checkout-repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: release/download-builds
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: build
+          pattern: build-*
+          merge-multiple: true
+
+      - name: release/setup-files-for-github-release
+        run: |
+          mkdir -p ./ghr-dist
+          find ./build/{macos-release,win-release,linux} -type f -exec cp --backup=numbered -t ./ghr-dist {} +
+
+      - name: release/publish-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.MATTERMOST_BUILD_GH_TOKEN }}
+        run: |
+          VERSION=$(jq -r .version package.json)
+          ./scripts/generate_release_markdown.sh ${VERSION} > release-notes.md
+          RELEASE_TITLE="v${VERSION} ($(date -u "+%Y-%m-%d"))"
+          [[ $VERSION =~ "-rc" ]] && PRERELEASE="--prerelease"
+          gh release create --draft ${PRERELEASE} --verify-tag -F release-notes.md --target "${GITHUB_SHA}" --title "${RELEASE_TITLE}" "${GITHUB_REF_NAME}" ./ghr-dist/*
+
+  end-notification:
+    runs-on: ubuntu-22.04
+    needs:
+      - github-release
+    steps:
+      - name: release/checkout-repo
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: release/fetch-version
+        id: calc
+        run: |
+          echo "BODY<<EOF" >> "${GITHUB_OUTPUT}"
+          bash -x scripts/generate_release_post.sh $(jq -r .version package.json) >> "${GITHUB_OUTPUT}"
+          echo "EOF" >> "${GITHUB_OUTPUT}"
+
+      - name: release/notify-channel
+        uses: mattermost/action-mattermost-notify@ae31bb6f9e26a54336e79696f108a2c91cf55b4e
+        with:
+          MATTERMOST_WEBHOOK_URL: ${{ secrets.MM_DESKTOP_RELEASE_WEBHOOK_URL }}
+          MATTERMOST_USERNAME: MattermostRelease
+          MATTERMOST_ICON_URL: https://mattermost.com/wp-content/uploads/2022/02/icon.png
+          TEXT: |
+            ${{ steps.calc.outputs.BODY }}

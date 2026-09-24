@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>DefaultServerList</key>
+	<array>
+		<dict>
+			<key>name</key>
+			<string>Community</string>
+			<key>url</key>
+			<string>https://community.mattermost.com</string>
+		</dict>
+	</array>
+	<key>EnableServerManagement</key>
+	<true/>
+	<key>EnableAutoUpdater</key>
+	<true/>
+	<key>TrustedEmbeddedMediaOrigins</key>
+	<array>
+		<dict>
+			<key>serverOrigin</key>
+			<string>https://chat.example.com</string>
+			<key>embeddedOrigin</key>
+			<string>https://meet.example.com</string>
+		</dict>
+	</array>
+</dict>
+</plist>
